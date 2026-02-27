@@ -72,6 +72,8 @@ local Settings = {
     RadarEnabled    = false,
     HUDEnabled      = true,
     HUDColor        = Color3.fromRGB(170,85,255),
+    FireKey         = Enum.KeyCode.Unknown,  -- secondary shoot key (None by default)
+    FireKeyEnabled  = false,
 }
 
 -- ============================================================
@@ -565,6 +567,50 @@ do
     Toggle(s3,"Auto Shoot","AutoFire",2)
     Slider(s3,"Trigger Delay","TriggerDelay",0.002,0.010,0.001,3)
 
+    local s3b = Section(p,"Fire Keybind",3)
+
+    local fkEnabledRow = New("Frame",{Size=UDim2.new(1,0,0,26),BackgroundTransparency=1,LayoutOrder=2},s3b)
+    New("TextLabel",{Size=UDim2.new(1,-52,1,0),BackgroundTransparency=1,Text="Enable Fire Key",TextColor3=TEXT,Font=Enum.Font.Gotham,TextSize=12,TextXAlignment=Enum.TextXAlignment.Left},fkEnabledRow)
+    local fkTrack = New("Frame",{Size=UDim2.new(0,40,0,20),Position=UDim2.new(1,-40,0.5,-10),BackgroundColor3=Color3.fromRGB(40,40,48),BorderSizePixel=0},fkEnabledRow)
+    Corner(10,fkTrack)
+    local fkKnob = New("Frame",{Size=UDim2.new(0,14,0,14),Position=UDim2.new(0,3,0.5,-7),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},fkTrack)
+    Corner(7,fkKnob)
+    local fkToggleHit = New("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""},fkEnabledRow)
+    fkToggleHit.MouseButton1Click:Connect(function()
+        Settings.FireKeyEnabled = not Settings.FireKeyEnabled
+        Tween(fkTrack,{BackgroundColor3=Settings.FireKeyEnabled and ACCENT or Color3.fromRGB(40,40,48)},0.12)
+        Tween(fkKnob,{Position=Settings.FireKeyEnabled and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7)},0.12)
+    end)
+
+    local fkRow = New("Frame",{Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=3},s3b)
+    local fkLabel = New("TextLabel",{Size=UDim2.new(1,-120,1,0),BackgroundTransparency=1,Text="Fire Key:",TextColor3=TEXT,Font=Enum.Font.Gotham,TextSize=12,TextXAlignment=Enum.TextXAlignment.Left},fkRow)
+    local fkBtn = New("TextButton",{
+        Size=UDim2.new(0,110,0,26),Position=UDim2.new(1,-110,0.5,-13),
+        BackgroundColor3=Color3.fromRGB(30,31,38),BorderSizePixel=0,
+        Text="[ NONE ]",TextColor3=ACCENT,Font=Enum.Font.GothamBold,TextSize=11,
+    },fkRow)
+    Corner(7,fkBtn)
+    Stroke(BORDER,1,fkBtn)
+
+    local listeningForKey = false
+    fkBtn.MouseButton1Click:Connect(function()
+        if listeningForKey then return end
+        listeningForKey = true
+        fkBtn.Text = "[ PRESS KEY... ]"
+        fkBtn.TextColor3 = Color3.fromRGB(255,220,0)
+        local conn
+        conn = UserInputService.InputBegan:Connect(function(inp, gpe)
+            if gpe then return end
+            if inp.UserInputType == Enum.UserInputType.Keyboard then
+                Settings.FireKey = inp.KeyCode
+                fkBtn.Text = "[ "..inp.KeyCode.Name:upper().." ]"
+                fkBtn.TextColor3 = ACCENT
+                listeningForKey = false
+                conn:Disconnect()
+            end
+        end)
+    end)
+
     local s4 = Section(p,"Advanced",4)
     Toggle(s4,"Hitbox Sink","HitboxSink",1)
     Slider(s4,"Sink Depth","HitboxSinkDepth",0,50,1,2)
@@ -622,58 +668,256 @@ end
 -- MISC
 do
     local p = tabPages["Misc"]
-    local s1 = Section(p,"Utility",1)
-    Toggle(s1,"Anti-AFK","AntiAFK",1)
-    Toggle(s1,"Hit Markers","HitMarker",2)
-    Toggle(s1,"Radar","RadarEnabled",3)
 
-    local s2 = Section(p,"HUD",2)
-    Toggle(s2,"Enable HUD","HUDEnabled",1)
+    -- Utility
+    local s1 = Section(p, "Utility", 1)
+    Toggle(s1, "Anti-AFK", "AntiAFK", 1)
+    Toggle(s1, "Hit Markers", "HitMarker", 2)
+    Toggle(s1, "Radar", "RadarEnabled", 3)
 
-    local s3 = Section(p,"GitHub",3)
+    -- Remove Textures
+    local texturesRemoved = false
+    local savedTextures = {}
+    local rtRow = New("Frame", {Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=5}, s1)
+    local rtBtn = New("TextButton", {
+        Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.fromRGB(30,31,38), BorderSizePixel=0,
+        Text="[Remove Textures]", TextColor3=TEXT, Font=Enum.Font.GothamBold, TextSize=12,
+    }, rtRow)
+    Corner(7, rtBtn)
+    Stroke(BORDER, 1, rtBtn)
+    rtBtn.MouseButton1Click:Connect(function()
+        if not texturesRemoved then
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Texture") or obj:IsA("Decal") then
+                    table.insert(savedTextures, {obj, obj.Parent, obj.Transparency})
+                    obj.Transparency = 1
+                elseif obj:IsA("SurfaceAppearance") then
+                    table.insert(savedTextures, {obj, obj.Parent, nil})
+                    obj.Parent = nil
+                end
+            end
+            texturesRemoved = true
+            rtBtn.Text = "[Restore Textures]"
+            rtBtn.TextColor3 = ACCENT
+        else
+            for _, data in ipairs(savedTextures) do
+                local obj, parent, extra = data[1], data[2], data[3]
+                pcall(function()
+                    if obj:IsA("Texture") or obj:IsA("Decal") then
+                        obj.Transparency = extra
+                    else
+                        obj.Parent = parent
+                    end
+                end)
+            end
+            savedTextures = {}
+            texturesRemoved = false
+            rtBtn.Text = "[Remove Textures]"
+            rtBtn.TextColor3 = TEXT
+        end
+    end)
 
-    local ghRow = New("Frame", {
-        Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=2
-    }, s3)
+    -- HUD
+    local s2 = Section(p, "HUD", 2)
+    Toggle(s2, "Enable HUD", "HUDEnabled", 1)
+
+    -- GitHub
+    local s3 = Section(p, "GitHub", 3)
+    local ghRow = New("Frame", {Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=2}, s3)
     local ghBtn = New("TextButton", {
-        Size=UDim2.new(1,0,1,0),
-        BackgroundColor3=Color3.fromRGB(30,31,38),
-        BorderSizePixel=0,
-        Text=">> Night-time-V3.666",
-        TextColor3=ACCENT,
-        Font=Enum.Font.GothamBold,
-        TextSize=12,
+        Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.fromRGB(30,31,38), BorderSizePixel=0,
+        Text=">> Night-time-V3.666", TextColor3=ACCENT, Font=Enum.Font.GothamBold, TextSize=12,
     }, ghRow)
     Corner(7, ghBtn)
     Stroke(BORDER, 1, ghBtn)
     ghBtn.MouseButton1Click:Connect(function()
         setclipboard("https://github.com/popmollytillmiweak/Night-time-V3.666/tree/3fa38e2e6679bd5bdd0813990b98ac8d319aae18")
-        ghBtn.Text = ">> Copied to clipboard!"
-        task.delay(2, function()
-            ghBtn.Text = ">> Night-time-V3.666"
-        end)
+        ghBtn.Text = ">> Copied!"
+        task.delay(2, function() ghBtn.Text = ">> Night-time-V3.666" end)
     end)
 
-    local loadRow = New("Frame", {
-        Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=3
-    }, s3)
+    local lsRow = New("Frame", {Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=3}, s3)
     local lsBtn = New("TextButton", {
-        Size=UDim2.new(1,0,1,0),
-        BackgroundColor3=Color3.fromRGB(30,31,38),
-        BorderSizePixel=0,
-        Text="[Copy Loadstring]",
-        TextColor3=TEXT,
-        Font=Enum.Font.Gotham,
-        TextSize=12,
-    }, loadRow)
+        Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.fromRGB(30,31,38), BorderSizePixel=0,
+        Text="[Copy Loadstring]", TextColor3=TEXT, Font=Enum.Font.Gotham, TextSize=12,
+    }, lsRow)
     Corner(7, lsBtn)
     Stroke(BORDER, 1, lsBtn)
     lsBtn.MouseButton1Click:Connect(function()
         setclipboard('loadstring(game:HttpGet("https://raw.githubusercontent.com/popmollytillmiweak/Night-time-V3.666/3fa38e2e6679bd5bdd0813990b98ac8d319aae18/NighttimeV3.5%20(2666).lua"))()')
         lsBtn.Text = ">> Copied!"
-        task.delay(2, function()
-            lsBtn.Text = "[Copy Loadstring]"
+        task.delay(2, function() lsBtn.Text = "[Copy Loadstring]" end)
+    end)
+
+    -- Config Manager
+    local s4 = Section(p, "Config Manager", 4)
+
+    -- Name box + save btn
+    local saveRow = New("Frame", {Size=UDim2.new(1,0,0,30), BackgroundTransparency=1, LayoutOrder=2}, s4)
+    local configNameBox = New("TextBox", {
+        Size=UDim2.new(1,-86,1,0), BackgroundColor3=Color3.fromRGB(28,29,36), BorderSizePixel=0,
+        Text="default", TextColor3=TEXT, Font=Enum.Font.Gotham, TextSize=12,
+        PlaceholderText="config name...", PlaceholderColor3=SUBTEXT, ClearTextOnFocus=false,
+    }, saveRow)
+    Corner(7, configNameBox)
+    Stroke(BORDER, 1, configNameBox)
+    New("UIPadding", {PaddingLeft=UDim.new(0,8)}, configNameBox)
+
+    local saveBtn = New("TextButton", {
+        Size=UDim2.new(0,80,1,0), Position=UDim2.new(1,-80,0,0),
+        BackgroundColor3=ACCENT, BorderSizePixel=0,
+        Text="Save", TextColor3=Color3.new(1,1,1), Font=Enum.Font.GothamBold, TextSize=12,
+    }, saveRow)
+    Corner(7, saveBtn)
+
+    -- Auto-load toggle
+    local autoLoadEnabled = false
+    local alRow = New("Frame", {Size=UDim2.new(1,0,0,26), BackgroundTransparency=1, LayoutOrder=3}, s4)
+    New("TextLabel", {
+        Size=UDim2.new(1,-52,1,0), BackgroundTransparency=1, Text="Auto-Load on Start",
+        TextColor3=TEXT, Font=Enum.Font.Gotham, TextSize=12, TextXAlignment=Enum.TextXAlignment.Left
+    }, alRow)
+    local alTrack = New("Frame", {
+        Size=UDim2.new(0,40,0,20), Position=UDim2.new(1,-40,0.5,-10),
+        BackgroundColor3=Color3.fromRGB(40,40,48), BorderSizePixel=0
+    }, alRow)
+    Corner(10, alTrack)
+    local alKnob = New("Frame", {
+        Size=UDim2.new(0,14,0,14), Position=UDim2.new(0,3,0.5,-7),
+        BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0
+    }, alTrack)
+    Corner(7, alKnob)
+    local alHitbox = New("TextButton", {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=""}, alRow)
+    alHitbox.MouseButton1Click:Connect(function()
+        autoLoadEnabled = not autoLoadEnabled
+        Tween(alTrack, {BackgroundColor3 = autoLoadEnabled and ACCENT or Color3.fromRGB(40,40,48)}, 0.12)
+        Tween(alKnob, {Position = autoLoadEnabled and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7)}, 0.12)
+        pcall(function()
+            writefile("nighttime_autoload.txt", autoLoadEnabled and configNameBox.Text or "")
         end)
+    end)
+
+    -- Status label
+    local statusLbl = New("TextLabel", {
+        Size=UDim2.new(1,0,0,16), BackgroundTransparency=1, Text="",
+        TextColor3=Color3.fromRGB(100,220,120), Font=Enum.Font.Gotham, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=4
+    }, s4)
+
+    -- Config list
+    local cfgList = New("Frame", {
+        Size=UDim2.new(1,0,0,0), BackgroundTransparency=1,
+        AutomaticSize=Enum.AutomaticSize.Y, LayoutOrder=5
+    }, s4)
+    New("UIListLayout", {SortOrder=Enum.SortOrder.LayoutOrder, Padding=UDim.new(0,4)}, cfgList)
+
+    local function setStatus(msg, col)
+        statusLbl.Text = msg
+        statusLbl.TextColor3 = col or Color3.fromRGB(100,220,120)
+        task.delay(2.5, function() statusLbl.Text = "" end)
+    end
+
+    local function serializeSettings()
+        local parts = {}
+        for k, v in pairs(Settings) do
+            local t = type(v)
+            if t == "boolean" then
+                table.insert(parts, k .. "=" .. tostring(v))
+            elseif t == "number" then
+                table.insert(parts, k .. "=" .. tostring(v))
+            elseif t == "string" then
+                table.insert(parts, k .. "=S:" .. v)
+            end
+        end
+        return table.concat(parts, "|")
+    end
+
+    local function deserializeSettings(str)
+        for pair in str:gmatch("[^|]+") do
+            local k, v = pair:match("^(.-)=(.+)$")
+            if k and v and Settings[k] ~= nil then
+                local t = type(Settings[k])
+                if t == "boolean" then
+                    Settings[k] = (v == "true")
+                elseif t == "number" then
+                    Settings[k] = tonumber(v) or Settings[k]
+                elseif t == "string" then
+                    Settings[k] = v:gsub("^S:", "")
+                end
+            end
+        end
+    end
+
+    local function refreshConfigList()
+        for _, c in ipairs(cfgList:GetChildren()) do
+            if not c:IsA("UIListLayout") then c:Destroy() end
+        end
+        local ok, files = pcall(listfiles, "nighttime_configs")
+        if not ok or not files then return end
+        for idx, path in ipairs(files) do
+            if not path:match("%.ntcfg$") then continue end
+            local cfgName = path:match("[^\/]+$"):gsub("%.ntcfg$", "")
+            local row = New("Frame", {Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=idx}, cfgList)
+            local ldBtn = New("TextButton", {
+                Size=UDim2.new(0,50,0,24), Position=UDim2.new(0,0,0.5,-12),
+                BackgroundColor3=Color3.fromRGB(20,70,30), BorderSizePixel=0,
+                Text="Load", TextColor3=Color3.fromRGB(80,220,100), Font=Enum.Font.GothamBold, TextSize=10,
+            }, row)
+            Corner(6, ldBtn)
+            local dlBtn = New("TextButton", {
+                Size=UDim2.new(0,24,0,24), Position=UDim2.new(0,54,0.5,-12),
+                BackgroundColor3=Color3.fromRGB(70,20,20), BorderSizePixel=0,
+                Text="X", TextColor3=Color3.fromRGB(220,60,60), Font=Enum.Font.GothamBold, TextSize=10,
+            }, row)
+            Corner(6, dlBtn)
+            New("TextLabel", {
+                Size=UDim2.new(1,-84,1,0), Position=UDim2.new(0,82,0,0),
+                BackgroundTransparency=1, Text=cfgName, TextColor3=TEXT,
+                Font=Enum.Font.Gotham, TextSize=11, TextXAlignment=Enum.TextXAlignment.Left,
+            }, row)
+            ldBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    deserializeSettings(readfile("nighttime_configs/" .. cfgName .. ".ntcfg"))
+                    setStatus("Loaded: " .. cfgName)
+                    ldBtn.Text = "OK"
+                    task.delay(1.5, function() ldBtn.Text = "Load" end)
+                end)
+            end)
+            dlBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    delfile("nighttime_configs/" .. cfgName .. ".ntcfg")
+                    refreshConfigList()
+                    setStatus("Deleted: " .. cfgName, Color3.fromRGB(220,80,80))
+                end)
+            end)
+        end
+    end
+
+    saveBtn.MouseButton1Click:Connect(function()
+        local name = (configNameBox.Text ~= "" and configNameBox.Text or "default")
+        pcall(function()
+            if not isfolder("nighttime_configs") then makefolder("nighttime_configs") end
+            writefile("nighttime_configs/" .. name .. ".ntcfg", serializeSettings())
+            setStatus("Saved: " .. name)
+            refreshConfigList()
+        end)
+    end)
+
+    -- Auto-load check on start
+    task.defer(function()
+        pcall(function()
+            if not isfile("nighttime_autoload.txt") then return end
+            local cfgName = readfile("nighttime_autoload.txt")
+            if cfgName == "" then return end
+            if not isfile("nighttime_configs/" .. cfgName .. ".ntcfg") then return end
+            deserializeSettings(readfile("nighttime_configs/" .. cfgName .. ".ntcfg"))
+            autoLoadEnabled = true
+            configNameBox.Text = cfgName
+            Tween(alTrack, {BackgroundColor3=ACCENT}, 0.12)
+            Tween(alKnob, {Position=UDim2.new(1,-17,0.5,-7)}, 0.12)
+            setStatus("Auto-loaded: " .. cfgName)
+        end)
+        refreshConfigList()
     end)
 end
 
@@ -885,7 +1129,9 @@ end
 
 RunService.RenderStepped:Connect(function()
     if not Settings.AimbotEnabled then return end
-    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return end
+    local rmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    local fk  = Settings.FireKeyEnabled and Settings.FireKey ~= Enum.KeyCode.Unknown and UserInputService:IsKeyDown(Settings.FireKey)
+    if not rmb and not fk then return end
     local target = getBestTarget()
     if not target then return end
 
@@ -913,23 +1159,49 @@ end)
 local mouse = LocalPlayer:GetMouse()
 local tbLastFire = 0
 
-RunService.Heartbeat:Connect(function(dt)
+-- Pre-build a character lookup table and keep it updated
+-- so we never loop Players inside the hot path
+local charMap = {}
+local function rebuildCharMap()
+    charMap = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if plr.Character then
+            charMap[plr] = plr.Character
+        end
+    end
+end
+rebuildCharMap()
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function(char)
+        charMap[plr] = char
+    end)
+end)
+Players.PlayerRemoving:Connect(function(plr)
+    charMap[plr] = nil
+end)
+RunService.Heartbeat:Connect(rebuildCharMap) -- keep fresh each frame
+
+-- Raycast params built once, reused every frame
+local tbParams = RaycastParams.new()
+tbParams.FilterType = Enum.RaycastFilterType.Exclude
+
+-- RenderStepped fires before frame render — faster than Heartbeat
+RunService.RenderStepped:Connect(function()
     if not Settings.TriggerBot then return end
 
     local now = tick()
     if (now - tbLastFire) < Settings.TriggerDelay then return end
 
-    -- Fast pre-check: mouse.Target before doing expensive raycast
+    -- O(1) target check via mouse.Target
     local target = mouse.Target
     if not target then return end
 
-    -- Quick lookup: is this target inside a player character?
+    -- O(n players) but uses pre-built map, no GetPlayers() call
     local hitChar = nil
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
+    for plr, char in pairs(charMap) do
         if Settings.TeamCheck and plr.Team == LocalPlayer.Team then continue end
-        local char = plr.Character
-        if char and char:IsAncestorOf(target) then
+        if char:IsAncestorOf(target) then
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
                 hitChar = char
@@ -940,20 +1212,26 @@ RunService.Heartbeat:Connect(function(dt)
 
     if not hitChar then return end
 
-    -- Confirm with raycast so we don't shoot through walls
+    -- Wall check only if enabled
     if Settings.WallCheck then
         local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
         local ray = Camera:ScreenPointToRay(center.X, center.Y)
-        local params = RaycastParams.new()
-        params.FilterDescendantsInstances = {LocalPlayer.Character}
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+        tbParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, tbParams)
         if not result or not hitChar:IsAncestorOf(result.Instance) then return end
     end
 
-    -- Fire immediately — no task.delay, no coroutine overhead
     tbLastFire = now
-    mouse1click()
+    if Settings.FireKeyEnabled and Settings.FireKey ~= Enum.KeyCode.Unknown then
+        -- Simulate key tap instead of mouse click
+        local uis = game:GetService("UserInputService")
+        keypress(Settings.FireKey.Value)
+        task.delay(0.01, function()
+            keyrelease(Settings.FireKey.Value)
+        end)
+    else
+        mouse1click()
+    end
 end)
 
 -- ============================================================
