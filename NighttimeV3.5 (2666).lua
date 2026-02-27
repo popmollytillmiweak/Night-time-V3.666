@@ -29,7 +29,7 @@ local Settings = {
     PredictionAmt   = 0.13,
     AutoFire        = false,
     TriggerBot      = false,
-    TriggerDelay    = 0.01,
+    TriggerDelay    = 0.005,
     ShowFOV         = true,
     FOVColor        = Color3.fromRGB(255,255,255),
     TargetESP       = false,
@@ -563,7 +563,7 @@ do
     local s3 = Section(p,"Automation",3)
     Toggle(s3,"Trigger Bot","TriggerBot",1)
     Toggle(s3,"Auto Shoot","AutoFire",2)
-    Slider(s3,"Trigger Delay","TriggerDelay",0,0.1,0.005,3)
+    Slider(s3,"Trigger Delay","TriggerDelay",0.002,0.010,0.001,3)
 
     local s4 = Section(p,"Advanced",4)
     Toggle(s4,"Hitbox Sink","HitboxSink",1)
@@ -629,6 +629,52 @@ do
 
     local s2 = Section(p,"HUD",2)
     Toggle(s2,"Enable HUD","HUDEnabled",1)
+
+    local s3 = Section(p,"GitHub",3)
+
+    local ghRow = New("Frame", {
+        Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=2
+    }, s3)
+    local ghBtn = New("TextButton", {
+        Size=UDim2.new(1,0,1,0),
+        BackgroundColor3=Color3.fromRGB(30,31,38),
+        BorderSizePixel=0,
+        Text=">> Night-time-V3.666",
+        TextColor3=ACCENT,
+        Font=Enum.Font.GothamBold,
+        TextSize=12,
+    }, ghRow)
+    Corner(7, ghBtn)
+    Stroke(BORDER, 1, ghBtn)
+    ghBtn.MouseButton1Click:Connect(function()
+        setclipboard("https://github.com/popmollytillmiweak/Night-time-V3.666/tree/3fa38e2e6679bd5bdd0813990b98ac8d319aae18")
+        ghBtn.Text = ">> Copied to clipboard!"
+        task.delay(2, function()
+            ghBtn.Text = ">> Night-time-V3.666"
+        end)
+    end)
+
+    local loadRow = New("Frame", {
+        Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=3
+    }, s3)
+    local lsBtn = New("TextButton", {
+        Size=UDim2.new(1,0,1,0),
+        BackgroundColor3=Color3.fromRGB(30,31,38),
+        BorderSizePixel=0,
+        Text="[Copy Loadstring]",
+        TextColor3=TEXT,
+        Font=Enum.Font.Gotham,
+        TextSize=12,
+    }, loadRow)
+    Corner(7, lsBtn)
+    Stroke(BORDER, 1, lsBtn)
+    lsBtn.MouseButton1Click:Connect(function()
+        setclipboard('loadstring(game:HttpGet("https://raw.githubusercontent.com/popmollytillmiweak/Night-time-V3.666/3fa38e2e6679bd5bdd0813990b98ac8d319aae18/NighttimeV3.5%20(2666).lua"))()')
+        lsBtn.Text = ">> Copied!"
+        task.delay(2, function()
+            lsBtn.Text = "[Copy Loadstring]"
+        end)
+    end)
 end
 
 -- Open Combat by default
@@ -911,4 +957,21 @@ RunService.Heartbeat:Connect(function(dt)
 end)
 
 -- ============================================================
-print("[Nighttime V3.5] Loaded! RightShift = toggle GUI | Delete = panic unload")
+-- ============================================================
+-- LOAD CORE LOGIC FROM GITHUB
+-- ============================================================
+local GITHUB_URL = "https://raw.githubusercontent.com/popmollytillmiweak/Night-time-V3.666/3fa38e2e6679bd5bdd0813990b98ac8d319aae18/NighttimeV3.5%20(2666).lua"
+
+local success, err = pcall(function()
+    local src = game:HttpGet(GITHUB_URL)
+    if src and #src > 0 then
+        loadstring(src)()
+    end
+end)
+
+if not success then
+    warn("[Nighttime] Failed to load from GitHub: " .. tostring(err))
+end
+
+-- ============================================================
+print("[Nighttime V3.666] Loaded! RightShift = toggle GUI | Delete = panic unload")
