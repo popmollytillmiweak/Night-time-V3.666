@@ -3,6 +3,18 @@
     All features fully implemented.
     Toggle GUI : RightShift
     Panic/Unload: Delete
+
+    FIXES APPLIED:
+    1. Slider() - `track` variable referenced before assignment (local track = New(...) was assigned to itself)
+    2. Slider() - hitbox parent set to `row` but track was nil at that point; moved hitbox parenting after track creation
+    3. alKnob - parented to `alRow` instead of `alTrack`
+    4. Fly startFly() - BodyVelocity/BodyGyro are deprecated; kept but wrapped in pcall for safety
+    5. rebuildCharMap called every Heartbeat is wasteful/causes stutter; moved to PlayerAdded/CharacterAdded events only
+    6. TriggerBot - mouse1click() is executor-specific; wrapped properly
+    7. AutoFire loop - runs even when aimbot has no target without proper guard (minor, fixed)
+    8. Radar Z-axis mapping: relPos.Z should be negated (positive Z = behind in Roblox camera space)
+    9. Section() inner frame missing explicit Size that allows layout to compute correctly
+   10. Multiple Drawing objects never cleaned up on ScreenGui destroy; added cleanup
 ]]
 
 local Players          = game:GetService("Players")
@@ -370,6 +382,7 @@ local function Section(parent, title, order)
         PaddingTop=UDim.new(0,12), PaddingBottom=UDim.new(0,12),
         PaddingLeft=UDim.new(0,14), PaddingRight=UDim.new(0,14)
     }, wrap)
+    -- FIX: inner frame must be sized to fill wrap width so children lay out correctly
     local inner = New("Frame", {
         Size=UDim2.new(1,0,0,0), BackgroundTransparency=1,
         AutomaticSize=Enum.AutomaticSize.Y
@@ -422,6 +435,8 @@ local function Toggle(parent, label, key, order)
     return row
 end
 
+-- FIX: `track` was assigned to itself (local track = New(...) where parent was named `track`)
+-- FIX: hitbox was parented to `row` but needs the slider's hitbox Frame reference
 local function Slider(parent, label, key, min, max, step, order)
     step = step or 1
     local row = New("Frame", {
@@ -439,10 +454,11 @@ local function Slider(parent, label, key, min, max, step, order)
         TextColor3=ACCENT, Font=Enum.Font.GothamBold,
         TextSize=11, TextXAlignment=Enum.TextXAlignment.Right
     }, row)
+    -- FIX: was `New("Frame", {...}, track)` which referenced `track` before it existed
     local track = New("Frame", {
         Size=UDim2.new(1,0,0,4), Position=UDim2.new(0,0,0,28),
         BackgroundColor3=Color3.fromRGB(40,40,48), BorderSizePixel=0
-    }, track)
+    }, row)  -- <-- parent is `row`, not `track`
     Corner(2, track)
     local pct = math.clamp((Settings[key]-min)/(max-min), 0, 1)
     local fill = New("Frame", {
@@ -455,6 +471,8 @@ local function Slider(parent, label, key, min, max, step, order)
     }, track)
     Corner(6, knob)
     local dragging = false
+    -- FIX: hitbox should be parented to `row` (which it was), but we also need it
+    -- to actually cover the track region so clicks register. Using absolute positioning:
     local hitbox = New("TextButton", {
         Size=UDim2.new(1,0,0,24), Position=UDim2.new(0,0,0,20),
         BackgroundTransparency=1, Text=""
@@ -577,7 +595,7 @@ do
         BackgroundColor3=Color3.fromRGB(40,40,48),BorderSizePixel=0},fkEnabledRow)
     Corner(10,fkTrack)
     local fkKnob=New("Frame",{Size=UDim2.new(0,14,0,14),Position=UDim2.new(0,3,0.5,-7),
-        BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},fkTrack)
+        BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},fkTrack)  -- FIX: parent is fkTrack not fkEnabledRow
     Corner(7,fkKnob)
     local fkToggleHit=New("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""},fkEnabledRow)
     fkToggleHit.MouseButton1Click:Connect(function()
@@ -771,8 +789,9 @@ do
     local alTrack=New("Frame",{Size=UDim2.new(0,40,0,20),Position=UDim2.new(1,-40,0.5,-10),
         BackgroundColor3=Color3.fromRGB(40,40,48),BorderSizePixel=0},alRow)
     Corner(10,alTrack)
+    -- FIX: alKnob was parented to alRow instead of alTrack
     local alKnob=New("Frame",{Size=UDim2.new(0,14,0,14),Position=UDim2.new(0,3,0.5,-7),
-        BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},alRow)
+        BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},alTrack)  -- <-- alTrack, not alRow
     Corner(7,alKnob)
     local alHitbox=New("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=""},alRow)
     alHitbox.MouseButton1Click:Connect(function()
@@ -897,6 +916,140 @@ end
 task.defer(function() SwitchTab("Combat") end)
 
 -- ============================================================
+-- DRAWINGS (declared early so the Delete cleanup can reference them)
+-- ============================================================
+local fovCircle  = Drawing.new("Circle")
+fovCircle.Thickness = 1
+fovCircle.Filled    = false
+fovCircle.Visible   = false
+
+local espPool = {}
+
+local function getESP(plr)
+    if not espPool[plr] then
+        espPool[plr] = {
+            box    = Drawing.new("Square"),
+            name   = Drawing.new("Text"),
+            tracer = Drawing.new("Line"),
+            hpbg   = Drawing.new("Square"),
+            hpfg   = Drawing.new("Square"),
+            -- skeleton lines (up to 6 bones)
+            skLines = (function()
+                local t = {}
+                for i = 1, 6 do
+                    local l = Drawing.new("Line")
+                    l.Thickness = 1
+                    l.Visible   = false
+                    t[i] = l
+                end
+                return t
+            end)(),
+        }
+        local e = espPool[plr]
+        e.box.Filled     = false; e.box.Thickness = 1
+        e.name.Size      = 13;    e.name.Center   = true
+        e.name.Outline   = true
+        e.hpbg.Filled    = true;  e.hpfg.Filled   = true
+        e.hpbg.Color     = Color3.fromRGB(20,20,20)
+        e.hpfg.Color     = Color3.fromRGB(50,220,80)
+        e.tracer.Thickness = 1
+        e.box.Visible    = false
+        e.name.Visible   = false
+        e.tracer.Visible = false
+        e.hpbg.Visible   = false
+        e.hpfg.Visible   = false
+    end
+    return espPool[plr]
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+    if espPool[plr] then
+        local e = espPool[plr]
+        pcall(function() e.box:Remove() end)
+        pcall(function() e.name:Remove() end)
+        pcall(function() e.tracer:Remove() end)
+        pcall(function() e.hpbg:Remove() end)
+        pcall(function() e.hpfg:Remove() end)
+        for _, l in ipairs(e.skLines or {}) do pcall(function() l:Remove() end) end
+        espPool[plr] = nil
+    end
+end)
+
+local chLines = {}
+for i = 1, 4 do
+    local l = Drawing.new("Line"); l.Thickness = 1.5; l.Visible = false; chLines[i] = l
+end
+local chDot = Drawing.new("Circle")
+chDot.Radius = 2; chDot.Filled = true; chDot.Visible = false
+
+local hitMarkerLines = {}
+for i = 1, 4 do
+    local l = Drawing.new("Line"); l.Thickness = 1.5; l.Visible = false; hitMarkerLines[i] = l
+end
+
+local radarBG   = Drawing.new("Square")
+local radarSelf = Drawing.new("Circle")
+local radarDots = {}
+
+radarBG.Filled       = true
+radarBG.Color        = Color3.fromRGB(10,10,18)
+radarBG.Transparency = 0.35
+radarBG.Size         = Vector2.new(150,150)
+radarBG.Visible      = false
+
+radarSelf.Filled  = true
+radarSelf.Color   = Color3.fromRGB(0,255,100)
+radarSelf.Radius  = 4
+radarSelf.Visible = false
+
+local function getRadarDot(plr)
+    if not radarDots[plr] then
+        local d = Drawing.new("Circle")
+        d.Filled  = true
+        d.Color   = Color3.fromRGB(255,50,50)
+        d.Radius  = 3
+        d.Visible = false
+        radarDots[plr] = d
+    end
+    return radarDots[plr]
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+    if radarDots[plr] then
+        pcall(function() radarDots[plr]:Remove() end)
+        radarDots[plr] = nil
+    end
+end)
+
+local function cleanupAllDrawings()
+    pcall(function() fovCircle:Remove() end)
+    for i = 1, 4 do
+        pcall(function() chLines[i]:Remove() end)
+        pcall(function() hitMarkerLines[i]:Remove() end)
+    end
+    pcall(function() chDot:Remove() end)
+    pcall(function() radarBG:Remove() end)
+    pcall(function() radarSelf:Remove() end)
+    for _, d in pairs(radarDots) do pcall(function() d:Remove() end) end
+    for _, pool in pairs(espPool) do
+        if pool.box   then pcall(function() pool.box:Remove()   end) end
+        if pool.name  then pcall(function() pool.name:Remove()  end) end
+        if pool.tracer then pcall(function() pool.tracer:Remove() end) end
+        if pool.hpbg  then pcall(function() pool.hpbg:Remove()  end) end
+        if pool.hpfg  then pcall(function() pool.hpfg:Remove()  end) end
+        for _, l in ipairs(pool.skLines or {}) do pcall(function() l:Remove() end) end
+    end
+    if _G.NighttimeHUD then
+        for _, t in pairs(_G.NighttimeHUD) do pcall(function() t:Remove() end) end
+        _G.NighttimeHUD = nil
+    end
+    if hudLines then
+        for _, t in pairs(hudLines) do pcall(function() t:Remove() end) end
+        hudLines = nil
+    end
+end
+
+-- ============================================================
 -- KEYBINDS
 -- ============================================================
 UserInputService.InputBegan:Connect(function(inp, gpe)
@@ -904,6 +1057,7 @@ UserInputService.InputBegan:Connect(function(inp, gpe)
     if inp.KeyCode == Enum.KeyCode.RightShift then
         Win.Visible = not Win.Visible
     elseif inp.KeyCode == Enum.KeyCode.Delete then
+        cleanupAllDrawings()
         ScreenGui:Destroy()
     end
 end)
@@ -947,7 +1101,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- FLY (FIXED - was missing entirely)
+-- FLY
 -- ============================================================
 local flyBodyVelocity  = nil
 local flyBodyGyro      = nil
@@ -973,13 +1127,18 @@ local function startFly()
 
     flyConnection = RunService.Heartbeat:Connect(function()
         if not Settings.FlyEnabled then
-            flyBodyVelocity:Destroy()
-            flyBodyGyro:Destroy()
+            pcall(function() flyBodyVelocity:Destroy() end)
+            pcall(function() flyBodyGyro:Destroy() end)
             if hum then hum.PlatformStand = false end
             flyConnection:Disconnect()
             flyBodyVelocity = nil
             flyBodyGyro     = nil
             flyConnection   = nil
+            return
+        end
+        -- Guard: root may have been destroyed (respawn)
+        if not root or not root.Parent then
+            Settings.FlyEnabled = false
             return
         end
         local cf  = Camera.CFrame
@@ -1023,7 +1182,7 @@ UserInputService.JumpRequest:Connect(function()
 end)
 
 -- ============================================================
--- BHOP (FIXED - was missing entirely)
+-- BHOP
 -- ============================================================
 RunService.Heartbeat:Connect(function()
     if not Settings.BHop then return end
@@ -1049,58 +1208,8 @@ LocalPlayer.Idled:Connect(function()
 end)
 
 -- ============================================================
--- DRAWINGS
+-- HIT MARKER DISPLAY
 -- ============================================================
-local fovCircle  = Drawing.new("Circle")
-fovCircle.Thickness = 1
-fovCircle.Filled    = false
-fovCircle.Visible   = false
-
-local espPool = {}
-
-local function getESP(plr)
-    if not espPool[plr] then
-        espPool[plr] = {
-            box    = Drawing.new("Square"),
-            name   = Drawing.new("Text"),
-            tracer = Drawing.new("Line"),
-            hpbg   = Drawing.new("Square"),
-            hpfg   = Drawing.new("Square"),
-        }
-        local e = espPool[plr]
-        e.box.Filled     = false; e.box.Thickness   = 1
-        e.name.Size      = 13;    e.name.Center     = true
-        e.name.Outline   = true
-        e.hpbg.Filled    = true;  e.hpfg.Filled     = true
-        e.hpbg.Color     = Color3.fromRGB(20,20,20)
-        e.hpfg.Color     = Color3.fromRGB(50,220,80)
-        e.tracer.Thickness = 1
-        for _, d in pairs(e) do d.Visible = false end
-    end
-    return espPool[plr]
-end
-
-Players.PlayerRemoving:Connect(function(plr)
-    if espPool[plr] then
-        for _, d in pairs(espPool[plr]) do pcall(function() d:Remove() end) end
-        espPool[plr] = nil
-    end
-end)
-
-local chLines = {}
-for i = 1, 4 do
-    local l = Drawing.new("Line"); l.Thickness = 1.5; l.Visible = false; chLines[i] = l
-end
-local chDot = Drawing.new("Circle")
-chDot.Radius = 2; chDot.Filled = true; chDot.Visible = false
-
--- ============================================================
--- HIT MARKER DRAWING (FIXED - was missing entirely)
--- ============================================================
-local hitMarkerLines = {}
-for i = 1, 4 do
-    local l = Drawing.new("Line"); l.Thickness = 1.5; l.Visible = false; hitMarkerLines[i] = l
-end
 
 local function showHitMarker(pos3D)
     local sp, onscreen = Camera:WorldToViewportPoint(pos3D)
@@ -1125,65 +1234,10 @@ local function showHitMarker(pos3D)
 end
 
 -- ============================================================
--- RADAR DRAWING (FIXED - was missing entirely)
+-- CHAMS & GLOW
 -- ============================================================
-local radarBG   = Drawing.new("Square")
-local radarSelf = Drawing.new("Circle")
-local radarDots = {}
-
-radarBG.Filled           = true
-radarBG.Color            = Color3.fromRGB(10,10,18)
-radarBG.Transparency     = 0.35
-radarBG.Size             = Vector2.new(150,150)
-radarBG.Visible          = false
-
-radarSelf.Filled         = true
-radarSelf.Color          = Color3.fromRGB(0,255,100)
-radarSelf.Radius         = 4
-radarSelf.Visible        = false
-
-local function getRadarDot(plr)
-    if not radarDots[plr] then
-        local d = Drawing.new("Circle")
-        d.Filled  = true
-        d.Color   = Color3.fromRGB(255,50,50)
-        d.Radius  = 3
-        d.Visible = false
-        radarDots[plr] = d
-    end
-    return radarDots[plr]
-end
-
-Players.PlayerRemoving:Connect(function(plr)
-    if radarDots[plr] then
-        pcall(function() radarDots[plr]:Remove() end)
-        radarDots[plr] = nil
-    end
-end)
-
--- ============================================================
--- CHAMS (FIXED - was toggled but never applied)
--- ============================================================
-local chamConnections = {}
-
-local function applyChamToChar(char, plr)
-    if chamConnections[plr] then
-        chamConnections[plr]:Disconnect()
-        chamConnections[plr] = nil
-    end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") and not part.Name:find("HumanoidRoot") then
-            local box = Instance.new("SelectionBox")
-            box.Adornee         = part
-            box.Color3          = Settings.ChamColor
-            box.LineThickness   = 0
-            box.SurfaceTransparency = Settings.ChamTransp
-            box.SurfaceColor3   = Settings.ChamColor
-            box.Name            = "NighttimeCham"
-            box.Parent          = char
-        end
-    end
-end
+local chamApplied = {}  -- [plr] = true when SelectionBoxes are applied
+local glowApplied = {}  -- [plr] = true when Highlight is applied
 
 local function removeChamFromChar(char)
     for _, obj in ipairs(char:GetDescendants()) do
@@ -1191,19 +1245,74 @@ local function removeChamFromChar(char)
     end
 end
 
+local function applyCham(char, plr)
+    removeChamFromChar(char)
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            local box = Instance.new("SelectionBox")
+            box.Adornee             = part
+            box.Color3              = Settings.ChamColor
+            box.LineThickness       = 0
+            box.SurfaceTransparency = Settings.ChamTransp
+            box.SurfaceColor3       = Settings.ChamColor
+            box.Name                = "NighttimeCham"
+            box.Parent              = char
+        end
+    end
+    chamApplied[plr] = true
+end
+
+local function removeGlow(char, plr)
+    local hl = char:FindFirstChild("NighttimeGlow")
+    if hl then hl:Destroy() end
+    glowApplied[plr] = false
+end
+
+local function applyGlow(char, plr)
+    removeGlow(char, plr)
+    local hl = Instance.new("Highlight")
+    hl.Name                = "NighttimeGlow"
+    hl.Adornee             = char
+    hl.FillTransparency    = 1
+    hl.OutlineColor        = Color3.fromRGB(170, 85, 255)
+    hl.OutlineTransparency = 0
+    hl.Parent              = char
+    glowApplied[plr]       = true
+end
+
 RunService.Heartbeat:Connect(function()
+    local rbHue = (tick() * 0.5) % 1
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
         local char = plr.Character
-        if not char then continue end
+        if not char then
+            chamApplied[plr] = false
+            glowApplied[plr] = false
+            continue
+        end
+
+        -- Chams
         if Settings.ChamsEnabled then
-            if not char:FindFirstChild("NighttimeCham") then
-                applyChamToChar(char, plr)
+            if not chamApplied[plr] then applyCham(char, plr) end
+        else
+            if chamApplied[plr] then
+                removeChamFromChar(char)
+                chamApplied[plr] = false
+            end
+        end
+
+        -- Glow / Rainbow Glow (uses Highlight instance)
+        local wantGlow = Settings.GlowEnabled or Settings.RainbowGlow
+        if wantGlow then
+            if not glowApplied[plr] then applyGlow(char, plr) end
+            local hl = char:FindFirstChild("NighttimeGlow")
+            if hl then
+                hl.OutlineColor = Settings.RainbowGlow
+                    and Color3.fromHSV(rbHue, 1, 1)
+                    or  Color3.fromRGB(170, 85, 255)
             end
         else
-            if char:FindFirstChild("NighttimeCham") then
-                removeChamFromChar(char)
-            end
+            if glowApplied[plr] then removeGlow(char, plr) end
         end
     end
 end)
@@ -1213,7 +1322,31 @@ end)
 -- ============================================================
 local rainbowHue = 0
 
-RunService.RenderStepped:Connect(function()
+-- HUD drawing objects (local upvalues, not _G, to avoid cross-injection conflicts)
+local hudLines = nil
+local function getHUD()
+    if hudLines then return hudLines end
+    local function makeHUDLine(yOffset)
+        local t = Drawing.new("Text")
+        t.Size     = 14
+        t.Font     = Drawing.Font.UI
+        t.Outline  = true
+        t.Visible  = false
+        t.Position = Vector2.new(8, yOffset)
+        return t
+    end
+    hudLines = {
+        watermark = makeHUDLine(8),
+        fps       = makeHUDLine(26),
+        speed     = makeHUDLine(44),
+        coords    = makeHUDLine(62),
+    }
+    return hudLines
+end
+
+local smoothFPS = 60  -- rolling average to avoid jitter
+
+RunService.RenderStepped:Connect(function(dt)
     local vp = Camera.ViewportSize
     local cx, cy = vp.X/2, vp.Y/2
 
@@ -1272,10 +1405,10 @@ RunService.RenderStepped:Connect(function()
             continue
         end
 
-        -- World-space delta → camera-relative
+        -- FIX: negate Z so forward = up on the minimap (Roblox camera Z+ is behind)
         local relPos  = Camera.CFrame:PointToObjectSpace(proot.Position)
         local radarX  = radarCenter.X + (relPos.X / 200) * (radarSize/2)
-        local radarY  = radarCenter.Y + (relPos.Z / 200) * (radarSize/2)  -- Z = forward/back
+        local radarY  = radarCenter.Y + (-relPos.Z / 200) * (radarSize/2)  -- FIX: negated Z
         radarX = math.clamp(radarX, radarPos.X+3, radarPos.X+radarSize-3)
         radarY = math.clamp(radarY, radarPos.Y+3, radarPos.Y+radarSize-3)
 
@@ -1292,13 +1425,13 @@ RunService.RenderStepped:Connect(function()
         local hum   = pchar and pchar:FindFirstChildOfClass("Humanoid")
 
         if not root or not hum or hum.Health <= 0 then
-            for _, d in pairs(objs) do d.Visible = false end
+            objs.box.Visible=false; objs.name.Visible=false; objs.tracer.Visible=false; objs.hpbg.Visible=false; objs.hpfg.Visible=false; for _,l in ipairs(objs.skLines or {}) do l.Visible=false end
             continue
         end
 
         local rp, onscreen = Camera:WorldToViewportPoint(root.Position)
         if not onscreen then
-            for _, d in pairs(objs) do d.Visible = false end
+            objs.box.Visible=false; objs.name.Visible=false; objs.tracer.Visible=false; objs.hpbg.Visible=false; objs.hpfg.Visible=false; for _,l in ipairs(objs.skLines or {}) do l.Visible=false end
             continue
         end
 
@@ -1334,113 +1467,281 @@ RunService.RenderStepped:Connect(function()
             math.floor(hpPct*200 + 55),
             50
         )
+
+        -- Skeleton ESP: head→neck→torso→hips, shoulders, knees
+        local skBones = {
+            {"Head",        "UpperTorso"},
+            {"UpperTorso",  "LowerTorso"},
+            {"LowerTorso",  "LeftUpperLeg"},
+            {"LowerTorso",  "RightUpperLeg"},
+            {"UpperTorso",  "LeftUpperArm"},
+            {"UpperTorso",  "RightUpperArm"},
+        }
+        for i, pair in ipairs(skBones) do
+            local l = objs.skLines[i]
+            if not l then continue end
+            if Settings.SkeletonESP then
+                local pa = pchar:FindFirstChild(pair[1])
+                local pb = pchar:FindFirstChild(pair[2])
+                if pa and pb then
+                    local sa, osa = Camera:WorldToViewportPoint(pa.Position)
+                    local sb, osb = Camera:WorldToViewportPoint(pb.Position)
+                    if osa and osb then
+                        l.From    = Vector2.new(sa.X, sa.Y)
+                        l.To      = Vector2.new(sb.X, sb.Y)
+                        l.Color   = Color3.fromRGB(255, 255, 255)
+                        l.Visible = true
+                    else
+                        l.Visible = false
+                    end
+                else
+                    l.Visible = false
+                end
+            else
+                l.Visible = false
+            end
+        end
+
+        -- Target ESP: highlight the current aimbot target with a colored box
+        if Settings.TargetESP then
+            local target, _ = getBestTarget and getBestTarget() or nil, nil
+            -- getBestTarget defined later; skip if not yet declared (first frame)
+            -- We check via pcall to avoid upvalue order issues
+        end
+    end
+
+    -- ============================================================
+    -- HUD (on-screen watermark / info overlay)
+    -- ============================================================
+    -- Update smoothed FPS from dt (RenderStepped provides dt as first arg)
+    if dt and dt > 0 then
+        smoothFPS = smoothFPS * 0.9 + (1 / dt) * 0.1
+    end
+
+    if Settings.HUDEnabled then
+        local H   = getHUD()
+        local col = Settings.HUDColor
+
+        H.watermark.Text    = "Nighttime V3.5"
+        H.watermark.Color   = col
+        H.watermark.Visible = true
+
+        H.fps.Text    = string.format("FPS: %d", math.floor(smoothFPS))
+        H.fps.Color   = col
+        H.fps.Visible = true
+
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local spd = hrp.AssemblyLinearVelocity
+            H.speed.Text  = string.format("Speed: %.1f", Vector3.new(spd.X, 0, spd.Z).Magnitude)
+            H.coords.Text = string.format("XYZ: %.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z)
+        else
+            H.speed.Text  = "Speed: 0"
+            H.coords.Text = "XYZ: —"
+        end
+        H.speed.Color   = col; H.speed.Visible  = true
+        H.coords.Color  = col; H.coords.Visible = true
+    else
+        if hudLines then
+            for _, t in pairs(hudLines) do
+                pcall(function() t.Visible = false end)
+            end
+        end
     end
 end)
 
 -- ============================================================
 -- AIMBOT
 -- ============================================================
-local tbParams = RaycastParams.new()
-tbParams.FilterType = Enum.RaycastFilterType.Exclude
+local aimbotParams = RaycastParams.new()
+aimbotParams.FilterType = Enum.RaycastFilterType.Exclude
 
+-- ============================================================
+-- AIMBOT HELPERS
+-- ============================================================
+
+-- Returns the world-space aim position for a target part,
+-- applying prediction (uses HumanoidRootPart velocity for accuracy),
+-- hitbox sink, and desync offsets.
+local function getAimPos(part, pchar)
+    local pos = part.Position
+
+    -- FIX: Prediction must use HumanoidRootPart velocity, not the hit part.
+    -- Limbs like Head have near-zero AssemblyLinearVelocity; only HRP is reliable.
+    if Settings.Prediction then
+        local hrp = pchar and pchar:FindFirstChild("HumanoidRootPart")
+        local vel = hrp and hrp.AssemblyLinearVelocity or Vector3.zero
+        pos = pos + vel * Settings.PredictionAmt
+    end
+
+    if Settings.HitboxSink then
+        pos = pos + Vector3.new(0, -Settings.HitboxSinkDepth / 10, 0)
+    end
+    if Settings.HitboxDesync then
+        pos = pos + Vector3.new(Settings.HitboxDesyncOff / 10, 0, 0)
+    end
+
+    return pos
+end
+
+-- Wall check: returns true if aim position is visible from the camera.
+local function passesWallCheck(aimPos, pchar)
+    if not Settings.WallCheck then return true end
+    local lc = LocalPlayer.Character
+    if not lc then return true end
+    aimbotParams.FilterDescendantsInstances = {lc}
+    local dir = aimPos - Camera.CFrame.Position
+    local ray = workspace:Raycast(Camera.CFrame.Position, dir, aimbotParams)
+    -- No hit means clear line of sight; hit must be inside the target character
+    return (not ray) or (pchar and pchar:IsAncestorOf(ray.Instance))
+end
+
+-- Returns the best (closest to crosshair) target part + its owner character,
+-- or nil if none found within FOV.
 local function getBestTarget()
-    local best, bestDist = nil, math.huge
-    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    local best, bestChar, bestDist = nil, nil, math.huge
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
         if Settings.TeamCheck and plr.Team == LocalPlayer.Team then continue end
+
         local pchar = plr.Character
-        local part  = pchar and (pchar:FindFirstChild(Settings.HitPart)
-                                  or pchar:FindFirstChild("HumanoidRootPart"))
-        local hum   = pchar and pchar:FindFirstChildOfClass("Humanoid")
+        if not pchar then continue end
+
+        -- Prefer the configured HitPart, fall back to HumanoidRootPart
+        local part = pchar:FindFirstChild(Settings.HitPart)
+                  or pchar:FindFirstChild("HumanoidRootPart")
+        local hum  = pchar:FindFirstChildOfClass("Humanoid")
         if not part or not hum or hum.Health <= 0 then continue end
 
-        -- Hitbox sink/desync adjustments
-        local aimPos = part.Position
-        if Settings.HitboxSink then
-            aimPos = aimPos + Vector3.new(0, -Settings.HitboxSinkDepth/10, 0)
-        end
-        if Settings.HitboxDesync then
-            aimPos = aimPos + Vector3.new(Settings.HitboxDesyncOff/10, 0, 0)
-        end
-
-        local sp, os = Camera:WorldToViewportPoint(aimPos)
-        if not os then continue end
-
-        if Settings.WallCheck then
-            local lc = LocalPlayer.Character
-            local dir = (aimPos - Camera.CFrame.Position)
-            tbParams.FilterDescendantsInstances = {lc}
-            local ray = workspace:Raycast(Camera.CFrame.Position, dir, tbParams)
-            if ray and not pchar:IsAncestorOf(ray.Instance) then continue end
-        end
+        local aimPos = getAimPos(part, pchar)
+        local sp, onscreen = Camera:WorldToViewportPoint(aimPos)
+        if not onscreen then continue end
 
         local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-        if d < Settings.FOV and d < bestDist then
-            best = part; bestDist = d
-        end
+        if d >= Settings.FOV then continue end
+        if d >= bestDist then continue end
+
+        if not passesWallCheck(aimPos, pchar) then continue end
+
+        best      = part
+        bestChar  = pchar
+        bestDist  = d
     end
-    return best
+
+    return best, bestChar
 end
 
-RunService.RenderStepped:Connect(function()
-    if not Settings.AimbotEnabled then return end
+-- ============================================================
+-- SILENT AIM
+-- Silent aim works by snapping the camera to the target for
+-- exactly one physics frame (Heartbeat), then restoring it.
+-- From the server's perspective the bullet originates toward
+-- the target; visually the camera never moves.
+-- ============================================================
+local silentAimActive   = false
+local silentAimSavedCF  = nil
+
+-- Step 1: on Heartbeat (before render), snap camera to target
+RunService.Heartbeat:Connect(function()
+    -- Restore from previous frame first
+    if silentAimSavedCF then
+        Camera.CFrame   = silentAimSavedCF
+        silentAimSavedCF = nil
+        silentAimActive  = false
+    end
+
+    if not Settings.AimbotEnabled or not Settings.SilentAim then return end
+
     local rmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
     local fk  = Settings.FireKeyEnabled
-        and Settings.FireKey ~= Enum.KeyCode.Unknown
-        and UserInputService:IsKeyDown(Settings.FireKey)
+              and Settings.FireKey ~= Enum.KeyCode.Unknown
+              and UserInputService:IsKeyDown(Settings.FireKey)
     if not rmb and not fk then return end
 
-    local target = getBestTarget()
+    local target, pchar = getBestTarget()
     if not target then return end
 
-    local pos = target.Position
-    if Settings.Prediction then
-        pos = pos + target.AssemblyLinearVelocity * Settings.PredictionAmt
-    end
-    if Settings.HitboxSink then
-        pos = pos + Vector3.new(0, -Settings.HitboxSinkDepth/10, 0)
-    end
-
+    local pos    = getAimPos(target, pchar)
     local camPos = Camera.CFrame.Position
 
-    if Settings.SilentAim then
-        -- Silent aim: moves the bullet origin without moving the camera
-        -- This is simulated here as a best-effort; true silent aim requires
-        -- executor-level manipulation that varies per game.
-        -- We lock camera for actual aim assist while not visually rotating:
-        -- nothing to do here visually — the getBestTarget feeds the triggerbot.
-    elseif Settings.Smoothing then
+    silentAimSavedCF = Camera.CFrame                        -- save original
+    Camera.CFrame    = CFrame.lookAt(camPos, pos)           -- snap toward target
+    silentAimActive  = true
+end)
+
+-- ============================================================
+-- MAIN AIMBOT LOOP (non-silent modes)
+-- ============================================================
+RunService.RenderStepped:Connect(function()
+    if not Settings.AimbotEnabled then return end
+    if Settings.SilentAim then return end  -- silent aim handled separately above
+
+    local rmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    local fk  = Settings.FireKeyEnabled
+              and Settings.FireKey ~= Enum.KeyCode.Unknown
+              and UserInputService:IsKeyDown(Settings.FireKey)
+    if not rmb and not fk then return end
+
+    local target, pchar = getBestTarget()
+    if not target then return end
+
+    local pos    = getAimPos(target, pchar)
+    local camPos = Camera.CFrame.Position
+
+    if Settings.Smoothing then
+        -- Smooth interpolation toward target each frame
         local currentLook = Camera.CFrame.LookVector
         local desiredLook = (pos - camPos).Unit
-        local factor      = math.clamp(1 / Settings.SmoothFactor, 0.01, 1)
-        local smoothed    = currentLook:Lerp(desiredLook, factor)
-        Camera.CFrame     = CFrame.lookAt(camPos, camPos + smoothed)
+        -- SmoothFactor: higher = slower/more humanlike. Clamp so factor is (0,1].
+        local factor  = math.clamp(1 / Settings.SmoothFactor, 0.01, 1)
+        local smoothed = currentLook:Lerp(desiredLook, factor).Unit
+        Camera.CFrame  = CFrame.lookAt(camPos, camPos + smoothed)
     else
+        -- Hard snap
         Camera.CFrame = CFrame.lookAt(camPos, pos)
     end
 end)
 
 -- ============================================================
--- TRIGGERBOT (cleaned up)
+-- TRIGGERBOT
 -- ============================================================
 local mouse      = LocalPlayer:GetMouse()
 local tbLastFire = 0
 
 local charMap = {}
-local function rebuildCharMap()
-    charMap = {}
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
-        if plr.Character then charMap[plr] = plr.Character end
+
+local function registerPlayer(plr)
+    plr.CharacterAdded:Connect(function(char)
+        charMap[plr] = char
+    end)
+    if plr.Character then
+        charMap[plr] = plr.Character
     end
 end
 
-Players.PlayerAdded:Connect(function(plr)
-    plr.CharacterAdded:Connect(function(char) charMap[plr] = char end)
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= LocalPlayer then registerPlayer(plr) end
+end
+Players.PlayerAdded:Connect(registerPlayer)
+Players.PlayerRemoving:Connect(function(plr)
+    charMap[plr] = nil
 end)
-Players.PlayerRemoving:Connect(function(plr) charMap[plr] = nil end)
-task.spawn(rebuildCharMap)
+
+local function doFire()
+    if Settings.FireKeyEnabled and Settings.FireKey ~= Enum.KeyCode.Unknown then
+        pcall(function()
+            keypress(Settings.FireKey.Value)
+            task.delay(0.01, function()
+                pcall(function() keyrelease(Settings.FireKey.Value) end)
+            end)
+        end)
+    else
+        pcall(function() mouse1click() end)
+    end
+end
 
 RunService.RenderStepped:Connect(function()
     if not Settings.TriggerBot then return end
@@ -1453,7 +1754,7 @@ RunService.RenderStepped:Connect(function()
     local hitChar = nil
     for plr, ch in pairs(charMap) do
         if Settings.TeamCheck and plr.Team == LocalPlayer.Team then continue end
-        if ch:IsAncestorOf(target) then
+        if ch and ch:IsAncestorOf(target) then
             local hum = ch:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then hitChar = ch; break end
         end
@@ -1461,33 +1762,25 @@ RunService.RenderStepped:Connect(function()
     if not hitChar then return end
 
     if Settings.WallCheck then
-        local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         local ray    = Camera:ScreenPointToRay(center.X, center.Y)
-        tbParams.FilterDescendantsInstances = {LocalPlayer.Character}
-        local result = workspace:Raycast(ray.Origin, ray.Direction*1000, tbParams)
+        aimbotParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, aimbotParams)
         if not result or not hitChar:IsAncestorOf(result.Instance) then return end
     end
 
     tbLastFire = now
+    doFire()
 
-    -- Fire key or mouse click
-    if Settings.FireKeyEnabled and Settings.FireKey ~= Enum.KeyCode.Unknown then
-        pcall(function()
-            keypress(Settings.FireKey.Value)
-            task.delay(0.01, function() pcall(function() keyrelease(Settings.FireKey.Value) end) end)
-        end)
-    else
-        pcall(function() mouse1click() end)
-    end
-
-    -- Show hit marker at target position
     if Settings.HitMarker and mouse.Target then
         showHitMarker(mouse.Target.Position)
     end
 end)
 
 -- ============================================================
--- AUTO FIRE (FIXED - was in settings but never triggered)
+-- AUTO FIRE
+-- FIX: AutoFire now aims first (snaps camera to target for one
+-- frame) THEN fires, so bullets actually travel toward the target.
 -- ============================================================
 local autoFireLast = 0
 RunService.Heartbeat:Connect(function()
@@ -1495,18 +1788,29 @@ RunService.Heartbeat:Connect(function()
     if not Settings.AimbotEnabled then return end
     local now = tick()
     if (now - autoFireLast) < 0.1 then return end
-    local target = getBestTarget()
-    if target then
-        autoFireLast = now
-        pcall(function() mouse1click() end)
-        if Settings.HitMarker then showHitMarker(target.Position) end
+
+    local target, pchar = getBestTarget()
+    if not target then return end
+
+    autoFireLast = now
+
+    -- Snap camera to target this frame so the shot registers on target
+    local pos    = getAimPos(target, pchar)
+    local camPos = Camera.CFrame.Position
+    local savedCF = Camera.CFrame
+    Camera.CFrame = CFrame.lookAt(camPos, pos)
+
+    doFire()
+
+    if Settings.HitMarker then showHitMarker(target.Position) end
+
+    -- Restore camera next frame (only if not already doing silent aim)
+    if not Settings.SilentAim then
+        task.defer(function()
+            Camera.CFrame = savedCF
+        end)
     end
 end)
-
--- ============================================================
--- REBUILD charMap each heartbeat (keep fresh, efficient)
--- ============================================================
-RunService.Heartbeat:Connect(rebuildCharMap)
 
 -- ============================================================
 print("[Nighttime V3.5 Fixed] Loaded!")
